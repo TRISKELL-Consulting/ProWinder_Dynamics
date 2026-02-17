@@ -1,0 +1,23 @@
+Winder/Unwinder - Next steps
+ 
+Pre-requisites
+- Contact Nilesh to understand the needs expressed by IC&D/Drives MKT > Albin
+- Contact PY PARICHAULT (expert) to understand customer pain-points > Hugues
+- Analyze solutions and performance from our competitors > Jaouher
+ 
+Approach
+1. Basic system test
+- Model-based-design: build physical model
+- interface physical model with controller code (Control Expert)
+- interface drive with controller
+ 
+2. Optimize system
+- Model-based-design: validate physical model vs real-life machine
+- update ATV dPAC controller code implementation (to align with Control Expert), to update functionality
+- improve drive fw, to optimize performance
+ 
+Challenges
+- how to validate the simulation vs real-life machine? talk to customer (Sylvamo) to help?
+- is it possible to address current customer pain-points?
+- is possible to align/exceed competitors features/performance?
+- is it possible to provide a better solution/performance than competitors? (less sensors, ...)
