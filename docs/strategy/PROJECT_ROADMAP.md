@@ -56,10 +56,10 @@ PHASE 1: Digital Twin & Modélisation
 |   ✅ Web model calibré (Kelvin-Voigt)
 |
 PHASE 2: Algorithmes de Contrôle
-|--------[████░░░░░░░░] 🔄 EN COURS (Mois 2-3)
+|--------[█████░░░░░░░] 🔄 EN COURS (Mois 2-3)
 |   
 |   Jalons:
-|   ⏳ RadiusCalculator (robust)
+|   ✅ RadiusCalculator (robust)
 |   ⏳ InertiaCompensator (feedforward)
 |   ⏳ Architecture MPC/PID adaptative
 |   
@@ -201,7 +201,7 @@ PHASE 4: Déploiement Industriel
 
 | ID | Tâche | Deadline | Dépend de | Status |
 |----|-------|----------|-----------|--------|
-| T2.1.1 | **RadiusCalculator (Robuste)** | Sem 1 | T1.1, T1.2 | ⏳ |
+| T2.1.1 | **RadiusCalculator (Robuste)** | Sem 1 | T1.1, T1.2 | ✅ |
 | | Fusion vitesse + intégration épaisseur | | | |
 | | Logique de basculement automatis. | | | |
 | | Tests contre dérives (capteurs fautifs) | | | |
