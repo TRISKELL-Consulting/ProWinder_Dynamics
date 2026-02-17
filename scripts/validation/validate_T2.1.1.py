@@ -12,6 +12,12 @@ Date: 17 Février 2026
 import numpy as np
 import time
 import sys
+import io
+
+# Configuration encodage UTF-8 pour Windows
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # Import du module
 sys.path.insert(0, 'src')
