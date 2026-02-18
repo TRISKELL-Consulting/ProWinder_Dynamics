@@ -8,6 +8,7 @@ from prowinder.mechanics.material import WebMaterial, MaterialProperties
 from prowinder.mechanics.friction import FrictionModel
 from prowinder.mechanics.web_span import WebSpan, SpanProperties
 from prowinder.control.observers import FrictionObserver
+from prowinder.control.tension_observer import TensionObserver
 from prowinder.control.filters import AdaptiveNotchFilter
 from prowinder.mechanics.dynamics import InertiaTracker
 
@@ -65,12 +66,28 @@ class DigitalTwin:
 
         # 2. Control System Elements
         self.observer = FrictionObserver(FrictionModel(0,0,0,0), gain=20.0)
+        self.tension_observer = TensionObserver(
+            material_props=config.material,
+            span_length=config.span_length,
+            dt=config.dt,
+            friction_observer=self.observer,
+            J_nominal=0.1,
+        )
         self.notch_filter = AdaptiveNotchFilter(20.0, 10.0, 1/config.dt)
         self.speed_integrator = 0.0 # For Speed Control Loop
         self.tension_integrator = 0.0 # For Tension Control Loop
+        self.prev_omega = 0.0
         
         # Data Logging
-        self.history = {'time': [], 'omega': [], 'radius': [], 'tension': [], 'torque': []}
+        self.history = {
+            'time': [],
+            'omega': [],
+            'radius': [],
+            'tension': [],
+            'tension_est': [],
+            'tension_mode': [],
+            'torque': []
+        }
 
     def step(self, speed_ref: float, tension_ref: float):
         dt = self.config.dt
@@ -86,6 +103,23 @@ class DigitalTwin:
         
         meas_radius = self.unwinder.radius
         meas_tension = self.web_span.tension # Measured by Load Cell on span
+        v_unwinder_surface = self.unwinder.omega * self.unwinder.radius
+        v_process = speed_ref
+
+        alpha_est = (meas_speed_winder - self.prev_omega) / dt
+        self.prev_omega = meas_speed_winder
+
+        tension_estimate = self.tension_observer.update(
+            tau_motor=self.motor.current_torque * G,
+            omega=meas_speed_winder,
+            alpha=alpha_est,
+            R=meas_radius,
+            v_upstream=v_unwinder_surface,
+            v_downstream=v_process,
+            J_total=est_inertia_total,
+            tension_measured=meas_tension,
+        )
+        meas_tension = tension_estimate.tension
         
         # --- B. CONTROL (The "Brain") ---
         
@@ -267,6 +301,8 @@ class DigitalTwin:
         self.history['omega'].append(self.unwinder.omega)
         self.history['radius'].append(self.unwinder.radius)
         self.history['tension'].append(real_tension)
+        self.history['tension_est'].append(tension_estimate.tension)
+        self.history['tension_mode'].append(tension_estimate.mode)
         self.history['torque'].append(torque_applied_motor)
 
 
