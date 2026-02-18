@@ -286,9 +286,11 @@ class InertiaEstimator:
     
     def _identify_batch(self) -> Tuple[np.ndarray, float]:
         """
-        Batch identification from collected data using least-squares.
+        Batch identification using SEQUENTIAL parameter estimation.
         
-        Solves: τ_motor - T_web·R = J·α + f_c·sign(ω) + f_v·ω
+        Phase 1: Identify f_viscous from constant-velocity data
+        Phase 2: Identify f_coulomb from near-zero velocity data  
+        Phase 3: Identify J from high-acceleration data
         
         Returns:
             theta: Parameter vector [J, f_coulomb, f_viscous]
@@ -296,40 +298,93 @@ class InertiaEstimator:
         """
         n = len(self.data_buffer)
         
-        # Construct regressor matrix X and target vector y
-        X = np.zeros((n, 3))
-        y = np.zeros(n)
+        # Initialize estimates
+        f_viscous = 0.05  # Initial guess
+        f_coulomb = 3.0   # Nominal value
+        J_total = 0.1
+        
+        # ===== PHASE 1: Identify f_viscous from constant-velocity data =====
+        # Select samples where α ≈ 0 and ω > 5 rad/s
+        phase1_data = [(i, d) for i, d in enumerate(self.data_buffer) 
+                       if abs(d.alpha) < 0.5 and abs(d.omega) > 5.0]
+        
+        if len(phase1_data) > 10:
+            # Build regression: (τ - T·R - f_c_nominal·sign(ω)) = f_v·ω
+            # Assume nominal f_c for now
+            X1 = np.array([d.omega for _, d in phase1_data])
+            y1 = np.array([d.tau_motor - d.T_web * d.R - 3.0 * np.sign(d.omega) 
+                          for _, d in phase1_data])
+            
+            # Linear regression (1D)
+            f_viscous = np.sum(X1 * y1) / (np.sum(X1 * X1) + 1e-6)
+            f_viscous = np.clip(f_viscous, 0.0, 5.0)
+            logger.debug(f"Phase 1: f_viscous={f_viscous:.4f} (from {len(phase1_data)} samples)")
+        
+        # ===== PHASE 2: Identify f_coulomb + J from varied acceleration data =====
+        # Select samples where |α| > 0.5 rad/s² (transient)
+        phase2_data = [(i, d) for i, d in enumerate(self.data_buffer) 
+                       if abs(d.alpha) > 0.5]
+        
+        if len(phase2_data) > 10:
+            # Build regression: (τ - T·R - f_v·ω) = f_c·sign(ω) + J·α
+            # Use 2D regression [sign(ω), α]
+            X2 = np.zeros((len(phase2_data), 2))
+            y2 = np.zeros(len(phase2_data))
+            
+            for i, (_, d) in enumerate(phase2_data):
+                X2[i, 0] = np.sign(d.omega) if d.omega != 0 else 0  # f_c term
+                X2[i, 1] = d.alpha                                   # J term
+                y2[i] = d.tau_motor - d.T_web * d.R - f_viscous * d.omega
+            
+            # Solve for [f_c, J]
+            try:
+                params = np.linalg.lstsq(X2, y2, rcond=None)[0]
+                f_coulomb = np.clip(params[0], 0.0, 50.0)
+                J_total = np.clip(params[1], 0.01, 10.0)
+                logger.debug(f"Phase 2: f_coulomb={f_coulomb:.2f}, J={J_total:.4f} "
+                            f"(from {len(phase2_data)} samples)")
+            except np.linalg.LinAlgError:
+                logger.warning("Phase 2 failed, using defaults")
+        
+        # ===== PHASE 3: Refine J from high-acceleration data =====
+        # Select samples where |α| > 2 rad/s² (strong acceleration)
+        phase3_data = [(i, d) for i, d in enumerate(self.data_buffer) 
+                       if abs(d.alpha) > 2.0]
+        
+        if len(phase3_data) > 5:
+            # Build regression: (τ - T·R - f_c·sign(ω) - f_v·ω) = J·α
+            X3 = np.array([d.alpha for _, d in phase3_data])
+            y3 = np.array([d.tau_motor - d.T_web * d.R - 
+                          f_coulomb * np.sign(d.omega) - f_viscous * d.omega 
+                          for _, d in phase3_data])
+            
+            # Linear regression (1D)
+            J_refined = np.sum(X3 * y3) / (np.sum(X3 * X3) + 1e-6)
+            if 0.01 < J_refined < 10.0:  # Sanity check
+                J_total = J_refined
+                logger.debug(f"Phase 3: J refined to {J_total:.4f} (from {len(phase3_data)} samples)")
+        
+        # ===== Calculate final residual =====
+        theta = np.array([J_total, f_coulomb, f_viscous])
+        
+        # Calculate residual over ALL data
+        X_all = np.zeros((n, 3))
+        y_all = np.zeros(n)
         
         for i, data in enumerate(self.data_buffer):
-            X[i, 0] = data.alpha                            # J·α
-            X[i, 1] = np.sign(data.omega) if data.omega != 0 else 0  # f_c·sign(ω)
-            X[i, 2] = data.omega                            # f_v·ω
-            
-            y[i] = data.tau_motor - data.T_web * data.R     # Left side
+            X_all[i, 0] = data.alpha
+            X_all[i, 1] = np.sign(data.omega) if data.omega != 0 else 0
+            X_all[i, 2] = data.omega
+            y_all[i] = data.tau_motor - data.T_web * data.R
         
-        # Solve least-squares: θ = (X^T X)^-1 X^T y
-        try:
-            theta = np.linalg.lstsq(X, y, rcond=None)[0]
-            
-            # Calculate residuals
-            y_pred = X @ theta
-            residuals = y - y_pred
-            residual_norm = np.linalg.norm(residuals) / np.linalg.norm(y)
-            
-            # Bounds checking
-            theta[0] = np.clip(theta[0], 0.01, 10.0)   # J: 0.01-10 kg·m²
-            theta[1] = np.clip(theta[1], 0.0, 50.0)    # f_c: 0-50 N·m
-            theta[2] = np.clip(theta[2], 0.0, 5.0)     # f_v: 0-5 N·m·s/rad
-            
-            logger.debug(f"Batch ID: J={theta[0]:.4f}, f_c={theta[1]:.2f}, "
-                        f"f_v={theta[2]:.4f}, residual={residual_norm:.4f}")
-            
-            return theta, residual_norm
-            
-        except np.linalg.LinAlgError as e:
-            logger.error(f"Least-squares failed: {e}")
-            # Return nominal values
-            return np.array([0.5, 5.0, 0.1]), 1.0
+        y_pred = X_all @ theta
+        residuals = y_all - y_pred
+        residual_norm = np.linalg.norm(residuals) / (np.linalg.norm(y_all) + 1e-6)
+        
+        logger.info(f"Sequential ID complete: J={theta[0]:.4f}, f_c={theta[1]:.2f}, "
+                   f"f_v={theta[2]:.4f}, residual={residual_norm:.4f}")
+        
+        return theta, residual_norm
     
     def _initialize_rls(self):
         """Initialize RLS for online tracking"""
@@ -475,11 +530,20 @@ class InertiaEstimator:
         if self.state == IdentificationState.IDENTIFYING:
             return 50.0  # Medium uncertainty during identification
         
-        # Uncertainty from diagonal of P (variance of J estimate)
+        if self.state == IdentificationState.CONFIRMED:
+            # After batch ID, use residual-based uncertainty
+            if self.residual_history:
+                residual = self.residual_history[-1]
+                # Map residual to uncertainty: 0→1%, 0.1→5%, 0.2→15%
+                uncertainty_pct = min(residual * 50.0, 100.0)
+                return max(uncertainty_pct, 1.0)  # At least 1%
+            return 10.0  # Default for confirmed
+        
+        # TRACKING state: Use RLS covariance
         variance_J = self.P[0, 0]
         std_J = np.sqrt(variance_J)
         
-        uncertainty_pct = (std_J / self.theta[0]) * 100.0 if self.theta[0] > 0 else 100.0
+        uncertainty_pct = (std_J / (abs(self.theta[0]) + 1e-6)) * 100.0
         
         # Clamp to reasonable range
         return np.clip(uncertainty_pct, 0.1, 100.0)

@@ -30,22 +30,43 @@ estimator = InertiaEstimator(
 print(f"=== Generating Synthetic Data ===")
 print(f"True values: J={J_total_true}, f_c={f_coulomb_true}, f_v={f_viscous_true}")
 
-# Generate simple test data
+# Generate realistic test data with rich excitation
 data = []
 dt = 0.01
+omega = 5.0  # Starting velocity
+
 for i in range(200):
     t = i * dt
     
-    # Simple velocity ramp
-    if t < 1.0:
-        omega = 5.0 + 10.0 * t  # Ramp up
-        alpha = 10.0
+    # Realistic velocity profile with multiple phases
+    if t < 0.5:
+        # Rapid acceleration
+        alpha = 15.0
+        omega += alpha * dt
+    elif t < 1.0:
+        # Constant velocity (for f_viscous identification)
+        alpha = 0.0
+        omega = 12.5
+    elif t < 1.3:
+        # Deceleration
+        alpha = -10.0
+        omega += alpha * dt
+    elif t < 1.7:
+        # Another constant velocity phase
+        alpha = 0.0
+        omega = 9.5
     else:
-        omega = 15.0  # Constant
-        alpha = 0.1
+        # Slow ramp
+        alpha = 3.0
+        omega += alpha * dt
+    
+    omega = max(0.1, omega)  # Prevent negative velocity
     
     # Calculate torque from true dynamics
-    tau = J_total_true * alpha + f_coulomb_true * np.sign(omega) + f_viscous_true * omega + T_web * R
+    tau = (J_total_true * alpha + 
+           f_coulomb_true * np.sign(omega) + 
+           f_viscous_true * omega + 
+           T_web * R)
     
     data.append(MeasurementData(
         tau_motor=tau,
