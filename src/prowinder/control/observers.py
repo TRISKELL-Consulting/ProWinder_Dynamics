@@ -27,6 +27,20 @@ class FrictionObserver:
         """
         # Modèle simplifié d'observateur de perturbation (Luenberger ou similaire)
         # Prediction
+        # Add basic feedforward model if available
+        # But wait, self.estimated_friction IS the disturbance state.
+        # If we have a 'model', we should output Model + Disturbance?
+        # Or this class is purely a DOB (Disturbance Observer)?
+        
+        # If gain is 0, we can use the model directly if we want "Perfect Model" behavior.
+        if self.gain == 0.0:
+            # Non-adaptive mode: return Model output directly
+            # The plant uses compute_torque, let's call that.
+            if hasattr(self.model, 'compute_torque'):
+                return self.model.compute_torque(measured_velocity)
+            else:
+                return 0.0
+        
         velocity_pred = self.state_estimate + (dt / inertia) * (applied_torque - self.estimated_friction)
         
         # Correction
