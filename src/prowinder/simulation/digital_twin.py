@@ -66,12 +66,15 @@ class DigitalTwin:
 
         # 2. Control System Elements
         self.observer = FrictionObserver(FrictionModel(0,0,0,0), gain=20.0)
+        # Use actual inertia for observer initialization
+        J_est = self.unwinder.get_total_inertia()
+        
         self.tension_observer = TensionObserver(
             material_props=config.material,
             span_length=config.span_length,
             dt=config.dt,
-            friction_observer=self.observer,
-            J_nominal=0.1,
+            friction_observer=None, # Disabled to avoid tension absorption
+            J_nominal=J_est if J_est > 0.01 else 0.01,
         )
         self.notch_filter = AdaptiveNotchFilter(20.0, 10.0, 1/config.dt)
         self.speed_integrator = 0.0 # For Speed Control Loop
@@ -106,11 +109,31 @@ class DigitalTwin:
         v_unwinder_surface = self.unwinder.omega * self.unwinder.radius
         v_process = speed_ref
 
+        # Improve Acceleration Estimation (Crucial for V~0 and transients)
+        # Simple backward difference introduces lag and noise.
+        # But for simulation with clean signals, it should be fine IF timed correctly.
+        # alpha_est at step k is (omega_k - omega_{k-1}) / dt. This is average accel over last step.
+        # Tension at step k caused this acceleration? Or was result of torques at k-1?
+        # Simulation loop:
+        # Step k: Read State -> Calculate Control -> Apply Torque -> Physics Update -> State k+1
+        # Here we are at State k.
+        # omega_k is the result of integration from k-1 to k.
+        # So (omega_k - omega_{k-1})/dt is the acceleration during (k-1, k).
+        # We want to estimate tension using Torque Balance.
+        # T_tension_avg = (J*alpha_avg - T_motor_avg + T_fric_avg) / R
+        # We need T_motor applied during (k-1, k).
+        # self.motor.current_torque stores the LAST applied torque (from k-1). Correct!
+        
         alpha_est = (meas_speed_winder - self.prev_omega) / dt
+        
+        # Use previous step's torque for estimation to match the alpha time window
+        torque_for_obs = self.motor.current_torque * G
+        
+        # Update history for next step
         self.prev_omega = meas_speed_winder
 
         tension_estimate = self.tension_observer.update(
-            tau_motor=self.motor.current_torque * G,
+            tau_motor=torque_for_obs,
             omega=meas_speed_winder,
             alpha=alpha_est,
             R=meas_radius,

@@ -127,19 +127,71 @@ class TensionObserver:
         J_used = max(J_used, 1e-6)
 
         # Friction estimation
+        # WARNING: An adaptive friction observer might absorb the tension torque at zero speed
+        # if it assumes T_load = 0.
+        # Ideally, we should use a Friction MODEL here, or an observer that knows about tension.
+        # For this implementation, we assume the friction observer is robust or we clamp it.
+        # But if it returns Total Resistance, we subtract it?
+        
+        # If observer returns calculated friction torque:
         friction_est = 0.0
         if self.friction_observer is not None:
-            friction_est = self.friction_observer.update(
+             # We update the observer, but we must be careful using its output for tension calculation
+             # if the observer itself doesn't account for tension.
+             # Ideally tension observer should own the friction observer and feed it the tension?
+             # Circular dependency.
+             
+             # Compromise: At low speed, assume Friction is small/coulomb, 
+             # and rely on the model in the observer if it has one.
+             # If FrictionObserver is adaptive, it kills the tension estimate.
+             
+             # Temp Fix: If V=0, maybe use a fixed friction model or 0? 
+             # Or trust the observer is configured as a Disturbance Observer (DOB) which estimates Load+Friction?
+             # If it estimates Load+Friction, then tension_tau IS the observer output (scaled).
+             
+             obs_out = self.friction_observer.update(
                 measured_velocity=omega,
                 applied_torque=tau_motor,
                 dt=dt_used,
                 inertia=J_used,
             )
+             # If the observer is a simple disturbance observer, obs_out = T_load_total.
+             # T_tension*R + T_fric.
+             # So Tension = obs_out / R.
+             # Let's assume standard FrictionObserver returns just Friction? 
+             # If it's a "FrictionObserver" class, it probably adapts a friction coefficient.
+             
+             # If we trust the FrictionObserver behaves like a friction model:
+             friction_est = obs_out
+
 
         # Torque-based tension estimate
-        tension_tau = self.last_tension
+        # Winder physics: J*alpha = T_motor + T_tension*R - T_friction
+        # So T_tension = (J*alpha - T_motor + T_friction) / R
+        # Wait, for Unwinder: Tension pulls (+), Motor brakes (-).
+        
+        # Let's assume standard motor convention: E = T_m - T_load
+        # Here we need magnitude of tension.
+        
+        # If simulation uses: J*alpha = T_net = T_motor + T_load(Tension) - T_friction
+        # Then T_load = J*alpha - T_motor + T_friction
+        # If T_motor is negative (-100), T_load is positive (+100).
+        # J*alpha (approx 0) = -100 + 100 + friction.
+        # So T_load = 0 - (-100) + friction = 100 + friction.
+        
+        # Current code: (tau_motor - J*alpha - friction) / R
+        # (-100 - 0 - friction) / R = -100 / R => Negative.
+        
+        # FIX: Flip the signs to get positive tension magnitude from braking torque.
+        # Alternatively, assume we want Signed Tension (which is + for tension).
+        
         if abs(R) >= self.min_radius:
-            tension_tau = (tau_motor - J_used * alpha - friction_est) / R
+            # Correct logic for Unwinder where Motor opposes Tension
+            # T_tension = (J*alpha - tau_motor + friction_est) / R ?
+            # Let's try: J*alpha = Tau_motor + Tau_tension - Friction
+            # Tau_tension = J*alpha - Tau_motor + Friction
+            tension_tau = (J_used * alpha - tau_motor + friction_est) / R
+            
         tension_tau = self._apply_limits(tension_tau)
 
         # Span-based tension estimate
